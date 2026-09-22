@@ -568,6 +568,100 @@ class TestContextManager(unittest.TestCase):
                     await _async_function(thing)
 
 
+class TestUnifiedRetryConditions(unittest.TestCase):
+    """Sync and async retry conditions follow one set of rules."""
+
+    def test_async_namespace_exports_all_sync_conditions(self) -> None:
+        sync_names = {name for name in dir(tenacity) if name.startswith("retry_")}
+        for name in sync_names:
+            assert hasattr(tasyncio, name), name
+            assert hasattr(tasyncio.retry, name), name
+
+    def test_mixed_combination_is_async_from_either_side(self) -> None:
+        async def a_pred(retry_state: RetryCallState) -> bool:
+            return True
+
+        def s_pred(retry_state: RetryCallState) -> bool:
+            return True
+
+        sync_cond = retry_if_result(lambda x: True)
+        async_cond = tasyncio.retry_if_result(a_pred)
+
+        for combined in (
+            async_cond & sync_cond,
+            sync_cond & async_cond,
+            sync_cond & a_pred,
+            a_pred & sync_cond,
+            async_cond | sync_cond,
+            sync_cond | async_cond,
+            sync_cond | a_pred,
+            a_pred | sync_cond,
+            async_cond & s_pred,
+        ):
+            assert type(combined).__module__ == "tenacity.asyncio.retry", combined
+
+    @asynctest
+    async def test_async_chain_flattens_like_sync(self) -> None:
+        async def a_pred(x: float) -> bool:
+            return True
+
+        a = tasyncio.retry_if_result(a_pred)
+        b = tasyncio.retry_if_result(a_pred)
+        c = tasyncio.retry_if_result(a_pred)
+        assert len((a & b & c).retries) == 3
+        assert len((a | b | c).retries) == 3
+
+        s = retry_if_result(lambda x: True)
+        assert len((a & s & c).retries) == 3
+        assert len((s & a & b).retries) == 3
+
+    @asynctest
+    async def test_sync_condition_with_async_predicate(self) -> None:
+        calls = 0
+
+        async def is_negative(x: float) -> bool:
+            return x < 0
+
+        @retry(stop=stop_after_attempt(3), retry=retry_if_result(is_negative))
+        async def f() -> int:
+            nonlocal calls
+            calls += 1
+            return -5
+
+        with pytest.raises(RetryError):
+            await f()
+        assert calls == 3
+
+    @asynctest
+    async def test_sync_condition_with_false_async_predicate(self) -> None:
+        calls = 0
+
+        async def never(x: float) -> bool:
+            return False
+
+        @retry(stop=stop_after_attempt(3), retry=retry_if_result(never))
+        async def f() -> int:
+            nonlocal calls
+            calls += 1
+            return -5
+
+        # A false async predicate must mean "do not retry", exactly as the
+        # async strategy would decide -- not "coroutine objects are truthy".
+        assert await f() == -5
+        assert calls == 1
+
+    def test_sync_loop_rejects_async_predicate(self) -> None:
+        async def is_negative(x: float) -> bool:
+            return x < 0
+
+        @retry(stop=stop_after_attempt(3), retry=retry_if_result(is_negative))
+        def f() -> int:
+            return -5
+
+        with pytest.raises(TypeError, match="awaitable"):
+            f()
+
+
 class TestDecoratorWrapper(unittest.TestCase):
     @asynctest
     async def test_retry_function_attributes(self) -> None:

@@ -17,12 +17,14 @@
 # limitations under the License.
 import dataclasses
 import functools
+import inspect
 import sys
 import threading
 import time
 import typing as t
 import warnings
 from abc import ABC, abstractmethod
+from collections.abc import Coroutine
 from concurrent import futures
 
 from . import _utils
@@ -415,7 +417,19 @@ class BaseRetrying(ABC):
         self.iter_state.actions.append(fn)
 
     def _run_retry(self, retry_state: "RetryCallState") -> None:
-        self.iter_state.retry_run_result = self.retry(retry_state)
+        result = self.retry(retry_state)
+        if inspect.isawaitable(result):
+            # A synchronous retry loop cannot await; refuse to derive a
+            # verdict from an unawaited coroutine (which is always truthy).
+            if isinstance(result, Coroutine):
+                result.close()
+            raise TypeError(
+                "Retry strategy returned an awaitable result, which a"
+                " synchronous retry loop cannot evaluate. Use"
+                " tenacity.AsyncRetrying (or the @retry decorator on an async"
+                " function) with asynchronous retry conditions."
+            )
+        self.iter_state.retry_run_result = result
 
     def _run_wait(self, retry_state: "RetryCallState") -> None:
         # `wait` is annotated as always set, so a type checker sees this guard

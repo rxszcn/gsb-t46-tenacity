@@ -127,6 +127,12 @@ def wrap_to_async_func(
         return call
 
     async def inner(*args: typing.Any, **kwargs: typing.Any) -> typing.Any:
-        return call(*args, **kwargs)
+        result = call(*args, **kwargs)
+        # A sync-looking callable may still produce an awaitable (e.g. a sync
+        # retry strategy wrapping an async predicate): await it so the verdict
+        # is the real result, never the truthiness of a coroutine object.
+        if inspect.isawaitable(result):
+            return await result
+        return result
 
     return inner

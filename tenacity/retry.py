@@ -15,52 +15,89 @@
 # limitations under the License.
 
 import abc
+import inspect
 import re
 import typing
 
+from tenacity import _utils
 from tenacity._utils import override
 
 if typing.TYPE_CHECKING:
     from tenacity import RetryCallState
+    from tenacity.asyncio import retry as async_retry
+
+
+def _unnest(operand: typing.Any, *combinators: type) -> tuple[typing.Any, ...]:
+    """Return the members of a combinator, or the operand itself."""
+    if isinstance(operand, combinators):
+        # isinstance() narrows the Any operand to object; cast it back.
+        return tuple(typing.cast("typing.Any", operand).retries)
+    return (operand,)
+
+
+def _combine_all(
+    left: "AnyRetryBaseT", right: "AnyRetryBaseT"
+) -> "retry_all | async_retry.retry_all":
+    """Combine two retry conditions with ``&``.
+
+    This is the single place deciding how conditions combine: if either
+    operand needs awaiting (an async retry strategy or a coroutine
+    callable), the combination is the async combinator so the verdict is
+    computed the same way no matter which side the async condition sits on.
+    """
+    if _utils.is_coroutine_callable(left) or _utils.is_coroutine_callable(right):
+        from tenacity.asyncio.retry import retry_all as async_retry_all
+
+        return async_retry_all(
+            *_unnest(left, retry_all, async_retry_all),
+            *_unnest(right, retry_all, async_retry_all),
+        )
+    return retry_all(*_unnest(left, retry_all), *_unnest(right, retry_all))
+
+
+def _combine_any(
+    left: "AnyRetryBaseT", right: "AnyRetryBaseT"
+) -> "retry_any | async_retry.retry_any":
+    """Combine two retry conditions with ``|``; see :func:`_combine_all`."""
+    if _utils.is_coroutine_callable(left) or _utils.is_coroutine_callable(right):
+        from tenacity.asyncio.retry import retry_any as async_retry_any
+
+        return async_retry_any(
+            *_unnest(left, retry_any, async_retry_any),
+            *_unnest(right, retry_any, async_retry_any),
+        )
+    return retry_any(*_unnest(left, retry_any), *_unnest(right, retry_any))
 
 
 class retry_base(abc.ABC):
     """Abstract base class for retry strategies."""
 
     @abc.abstractmethod
-    def __call__(self, retry_state: "RetryCallState") -> bool:
-        pass
+    def __call__(self, retry_state: "RetryCallState") -> bool | typing.Awaitable[bool]:
+        """Return whether to retry.
 
-    def __and__(self, other: "RetryBaseT") -> "retry_all":
-        if isinstance(other, retry_base):
-            return other.__rand__(self)
-        # Plain callable: flatten if self is already a retry_all
-        if isinstance(self, retry_all):
-            return retry_all(*self.retries, other)
-        return retry_all(self, other)
+        May return an awaitable when the condition involves async
+        predicates; asynchronous retry runners await it, the synchronous
+        runner rejects it.
+        """
 
-    def __rand__(self, other: "RetryBaseT") -> "retry_all":
-        # Flatten if other is already a retry_all
-        if isinstance(other, retry_all):
-            return retry_all(*other.retries, self)
-        return retry_all(other, self)
+    def __and__(self, other: "AnyRetryBaseT") -> "retry_all | async_retry.retry_all":
+        return _combine_all(self, other)
 
-    def __or__(self, other: "RetryBaseT") -> "retry_any":
-        if isinstance(other, retry_base):
-            return other.__ror__(self)
-        # Plain callable: flatten if self is already a retry_any
-        if isinstance(self, retry_any):
-            return retry_any(*self.retries, other)
-        return retry_any(self, other)
+    def __rand__(self, other: "AnyRetryBaseT") -> "retry_all | async_retry.retry_all":
+        return _combine_all(other, self)
 
-    def __ror__(self, other: "RetryBaseT") -> "retry_any":
-        # Flatten if other is already a retry_any
-        if isinstance(other, retry_any):
-            return retry_any(*other.retries, self)
-        return retry_any(other, self)
+    def __or__(self, other: "AnyRetryBaseT") -> "retry_any | async_retry.retry_any":
+        return _combine_any(self, other)
+
+    def __ror__(self, other: "AnyRetryBaseT") -> "retry_any | async_retry.retry_any":
+        return _combine_any(other, self)
 
 
 RetryBaseT = retry_base | typing.Callable[["RetryCallState"], bool]
+# Anything that can play the role of a retry condition, including
+# conditions that can only be evaluated asynchronously.
+AnyRetryBaseT = RetryBaseT | typing.Callable[["RetryCallState"], typing.Awaitable[bool]]
 
 
 class _retry_never(retry_base):
@@ -72,6 +109,10 @@ class _retry_never(retry_base):
 
 
 retry_never = _retry_never()
+
+
+async def _negate(awaitable: typing.Awaitable[bool]) -> bool:
+    return not await awaitable
 
 
 class _retry_always(retry_base):
@@ -88,11 +129,14 @@ retry_always = _retry_always()
 class retry_if_exception(retry_base):
     """Retry strategy that retries if an exception verifies a predicate."""
 
-    def __init__(self, predicate: typing.Callable[[BaseException], bool]) -> None:
+    def __init__(
+        self,
+        predicate: typing.Callable[[BaseException], bool | typing.Awaitable[bool]],
+    ) -> None:
         self.predicate = predicate
 
     @override
-    def __call__(self, retry_state: "RetryCallState") -> bool:
+    def __call__(self, retry_state: "RetryCallState") -> bool | typing.Awaitable[bool]:
         if retry_state.outcome is None:
             raise RuntimeError("__call__() called before outcome was set")
 
@@ -149,7 +193,7 @@ class retry_unless_exception_type(retry_if_exception):
         return not isinstance(e, self.exception_types)
 
     @override
-    def __call__(self, retry_state: "RetryCallState") -> bool:
+    def __call__(self, retry_state: "RetryCallState") -> bool | typing.Awaitable[bool]:
         if retry_state.outcome is None:
             raise RuntimeError("__call__() called before outcome was set")
 
@@ -200,11 +244,14 @@ class retry_if_exception_cause_type(retry_base):
 class retry_if_result(retry_base):
     """Retries if the result verifies a predicate."""
 
-    def __init__(self, predicate: typing.Callable[[typing.Any], bool]) -> None:
+    def __init__(
+        self,
+        predicate: typing.Callable[[typing.Any], bool | typing.Awaitable[bool]],
+    ) -> None:
         self.predicate = predicate
 
     @override
-    def __call__(self, retry_state: "RetryCallState") -> bool:
+    def __call__(self, retry_state: "RetryCallState") -> bool | typing.Awaitable[bool]:
         if retry_state.outcome is None:
             raise RuntimeError("__call__() called before outcome was set")
 
@@ -216,16 +263,22 @@ class retry_if_result(retry_base):
 class retry_if_not_result(retry_base):
     """Retries if the result refutes a predicate."""
 
-    def __init__(self, predicate: typing.Callable[[typing.Any], bool]) -> None:
+    def __init__(
+        self,
+        predicate: typing.Callable[[typing.Any], bool | typing.Awaitable[bool]],
+    ) -> None:
         self.predicate = predicate
 
     @override
-    def __call__(self, retry_state: "RetryCallState") -> bool:
+    def __call__(self, retry_state: "RetryCallState") -> bool | typing.Awaitable[bool]:
         if retry_state.outcome is None:
             raise RuntimeError("__call__() called before outcome was set")
 
         if not retry_state.outcome.failed:
-            return not self.predicate(retry_state.outcome.result())
+            result = self.predicate(retry_state.outcome.result())
+            if inspect.isawaitable(result):
+                return _negate(result)
+            return not result
         return False
 
 
@@ -268,7 +321,7 @@ class retry_if_not_exception_message(retry_if_exception_message):
         return not super()._check(exception)
 
     @override
-    def __call__(self, retry_state: "RetryCallState") -> bool:
+    def __call__(self, retry_state: "RetryCallState") -> bool | typing.Awaitable[bool]:
         if retry_state.outcome is None:
             raise RuntimeError("__call__() called before outcome was set")
 
@@ -284,32 +337,66 @@ class retry_if_not_exception_message(retry_if_exception_message):
 class retry_any(retry_base):
     """Retries if any of the retries condition is valid."""
 
-    def __init__(self, *retries: "RetryBaseT") -> None:
+    def __init__(self, *retries: "AnyRetryBaseT") -> None:
         self.retries = retries
 
     @override
-    def __call__(self, retry_state: "RetryCallState") -> bool:
-        return any(r(retry_state) for r in self.retries)
+    def __call__(self, retry_state: "RetryCallState") -> bool | typing.Awaitable[bool]:
+        remaining = iter(self.retries)
+        for retry in remaining:
+            result = retry(retry_state)
+            if inspect.isawaitable(result):
+                return self._resolve_async(result, remaining, retry_state)
+            if result:
+                return True
+        return False
 
-    @override
-    def __ror__(self, other: "RetryBaseT") -> "retry_any":
-        if isinstance(other, retry_any):
-            return retry_any(*other.retries, *self.retries)
-        return retry_any(other, *self.retries)
+    async def _resolve_async(
+        self,
+        first: typing.Awaitable[bool],
+        remaining: typing.Iterator["AnyRetryBaseT"],
+        retry_state: "RetryCallState",
+    ) -> bool:
+        if await first:
+            return True
+        for retry in remaining:
+            result = retry(retry_state)
+            if inspect.isawaitable(result):
+                result = await result
+            if result:
+                return True
+        return False
 
 
 class retry_all(retry_base):
     """Retries if all the retries condition are valid."""
 
-    def __init__(self, *retries: "RetryBaseT") -> None:
+    def __init__(self, *retries: "AnyRetryBaseT") -> None:
         self.retries = retries
 
     @override
-    def __call__(self, retry_state: "RetryCallState") -> bool:
-        return all(r(retry_state) for r in self.retries)
+    def __call__(self, retry_state: "RetryCallState") -> bool | typing.Awaitable[bool]:
+        remaining = iter(self.retries)
+        for retry in remaining:
+            result = retry(retry_state)
+            if inspect.isawaitable(result):
+                return self._resolve_async(result, remaining, retry_state)
+            if not result:
+                return False
+        return True
 
-    @override
-    def __rand__(self, other: "RetryBaseT") -> "retry_all":
-        if isinstance(other, retry_all):
-            return retry_all(*other.retries, *self.retries)
-        return retry_all(other, *self.retries)
+    async def _resolve_async(
+        self,
+        first: typing.Awaitable[bool],
+        remaining: typing.Iterator["AnyRetryBaseT"],
+        retry_state: "RetryCallState",
+    ) -> bool:
+        if not await first:
+            return False
+        for retry in remaining:
+            result = retry(retry_state)
+            if inspect.isawaitable(result):
+                result = await result
+            if not result:
+                return False
+        return True

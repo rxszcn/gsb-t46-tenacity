@@ -772,7 +772,7 @@ class TestRetryConditions(unittest.TestCase):
     def test_retry_if_result(self) -> None:
         retry = tenacity.retry_if_result(lambda x: x == 1)
 
-        def r(fut: tenacity.Future) -> bool:
+        def r(fut: tenacity.Future) -> bool | typing.Awaitable[bool]:
             retry_state = make_retry_state(1, 1.0, last_result=fut)
             return retry(retry_state)
 
@@ -782,7 +782,7 @@ class TestRetryConditions(unittest.TestCase):
     def test_retry_if_not_result(self) -> None:
         retry = tenacity.retry_if_not_result(lambda x: x == 1)
 
-        def r(fut: tenacity.Future) -> bool:
+        def r(fut: tenacity.Future) -> bool | typing.Awaitable[bool]:
             retry_state = make_retry_state(1, 1.0, last_result=fut)
             return retry(retry_state)
 
@@ -795,7 +795,7 @@ class TestRetryConditions(unittest.TestCase):
             tenacity.retry_if_result(lambda x: x == 2),
         )
 
-        def r(fut: tenacity.Future) -> bool:
+        def r(fut: tenacity.Future) -> bool | typing.Awaitable[bool]:
             retry_state = make_retry_state(1, 1.0, last_result=fut)
             return retry(retry_state)
 
@@ -810,7 +810,7 @@ class TestRetryConditions(unittest.TestCase):
             tenacity.retry_if_result(lambda x: isinstance(x, int)),
         )
 
-        def r(fut: tenacity.Future) -> bool:
+        def r(fut: tenacity.Future) -> bool | typing.Awaitable[bool]:
             retry_state = make_retry_state(1, 1.0, last_result=fut)
             return retry(retry_state)
 
@@ -824,7 +824,7 @@ class TestRetryConditions(unittest.TestCase):
             lambda x: isinstance(x, int)
         )
 
-        def r(fut: tenacity.Future) -> bool:
+        def r(fut: tenacity.Future) -> bool | typing.Awaitable[bool]:
             retry_state = make_retry_state(1, 1.0, last_result=fut)
             return retry(retry_state)
 
@@ -838,7 +838,7 @@ class TestRetryConditions(unittest.TestCase):
             lambda x: x == "foo"
         ) | tenacity.retry_if_result(lambda x: isinstance(x, int))
 
-        def r(fut: tenacity.Future) -> bool:
+        def r(fut: tenacity.Future) -> bool | typing.Awaitable[bool]:
             retry_state = make_retry_state(1, 1.0, last_result=fut)
             return retry(retry_state)
 
