@@ -13,136 +13,150 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import abc
 import typing
 
-from tenacity import _utils, retry_base
-from tenacity._utils import override
+from tenacity.retry import (
+    RetryBaseT as SyncRetryBaseT,
+)
+from tenacity.retry import (
+    _retry_always as sync_retry_always,
+)
+from tenacity.retry import (
+    _retry_never as sync_retry_never,
+)
+from tenacity.retry import (
+    retry_all as sync_retry_all,
+)
+from tenacity.retry import (
+    retry_any as sync_retry_any,
+)
+from tenacity.retry import (
+    retry_base as sync_retry_base,
+)
+from tenacity.retry import (
+    retry_if_exception as sync_retry_if_exception,
+)
+from tenacity.retry import (
+    retry_if_exception_cause_type as sync_retry_if_exception_cause_type,
+)
+from tenacity.retry import (
+    retry_if_exception_message as sync_retry_if_exception_message,
+)
+from tenacity.retry import (
+    retry_if_exception_type as sync_retry_if_exception_type,
+)
+from tenacity.retry import (
+    retry_if_not_exception_message as sync_retry_if_not_exception_message,
+)
+from tenacity.retry import (
+    retry_if_not_exception_type as sync_retry_if_not_exception_type,
+)
+from tenacity.retry import (
+    retry_if_not_result as sync_retry_if_not_result,
+)
+from tenacity.retry import (
+    retry_if_result as sync_retry_if_result,
+)
+from tenacity.retry import (
+    retry_unless_exception_type as sync_retry_unless_exception_type,
+)
 
 if typing.TYPE_CHECKING:
     from tenacity import RetryCallState
 
 
-class async_retry_base(retry_base):
+class async_retry_base(sync_retry_base):
     """Abstract base class for async retry strategies."""
 
-    @abc.abstractmethod
-    @override
-    async def __call__(self, retry_state: "RetryCallState") -> bool:  # type: ignore[override]
-        pass
+    _is_async = True
 
-    @override
-    def __and__(  # type: ignore[override]
-        self, other: "retry_base | async_retry_base"
-    ) -> "retry_all":
-        return retry_all(self, other)
 
-    @override
-    def __rand__(  # type: ignore[misc,override]
-        self, other: "retry_base | async_retry_base"
-    ) -> "retry_all":
-        return retry_all(other, self)
-
-    @override
-    def __or__(  # type: ignore[override]
-        self, other: "retry_base | async_retry_base"
-    ) -> "retry_any":
-        return retry_any(self, other)
-
-    @override
-    def __ror__(  # type: ignore[misc,override]
-        self, other: "retry_base | async_retry_base"
-    ) -> "retry_any":
-        return retry_any(other, self)
-
+retry_base = async_retry_base
 
 RetryBaseT = (
     async_retry_base | typing.Callable[["RetryCallState"], typing.Awaitable[bool]]
 )
 
 
-class retry_if_exception(async_retry_base):
-    """Retry strategy that retries if an exception verifies a predicate."""
-
-    def __init__(
-        self, predicate: typing.Callable[[BaseException], typing.Awaitable[bool]]
-    ) -> None:
-        self.predicate = predicate
-
-    @override
-    async def __call__(self, retry_state: "RetryCallState") -> bool:  # type: ignore[override]
-        if retry_state.outcome is None:
-            raise RuntimeError("__call__() called before outcome was set")
-
-        if retry_state.outcome.failed:
-            exception = retry_state.outcome.exception()
-            if exception is None:
-                raise RuntimeError("outcome failed but the exception is None")
-            return await self.predicate(exception)
-        return False
+class retry_if_exception(async_retry_base, sync_retry_if_exception):
+    pass
 
 
-class retry_if_result(async_retry_base):
-    """Retries if the result verifies a predicate."""
-
-    def __init__(
-        self, predicate: typing.Callable[[typing.Any], typing.Awaitable[bool]]
-    ) -> None:
-        self.predicate = predicate
-
-    @override
-    async def __call__(self, retry_state: "RetryCallState") -> bool:  # type: ignore[override]
-        if retry_state.outcome is None:
-            raise RuntimeError("__call__() called before outcome was set")
-
-        if not retry_state.outcome.failed:
-            return await self.predicate(retry_state.outcome.result())
-        return False
+class retry_if_exception_type(async_retry_base, sync_retry_if_exception_type):
+    pass
 
 
-class retry_any(async_retry_base):
-    """Retries if any of the retries condition is valid."""
-
-    def __init__(self, *retries: retry_base | async_retry_base) -> None:
-        self.retries = retries
-
-    @override
-    async def __call__(self, retry_state: "RetryCallState") -> bool:  # type: ignore[override]
-        result = False
-        for r in self.retries:
-            result = result or await _utils.wrap_to_async_func(r)(retry_state)
-            if result:
-                break
-        return result
-
-    @override
-    def __ror__(  # type: ignore[misc,override]
-        self, other: "retry_base | async_retry_base"
-    ) -> "retry_any":
-        if isinstance(other, retry_any):
-            return retry_any(*other.retries, *self.retries)
-        return retry_any(other, *self.retries)
+class retry_if_not_exception_type(async_retry_base, sync_retry_if_not_exception_type):
+    pass
 
 
-class retry_all(async_retry_base):
-    """Retries if all the retries condition are valid."""
+class retry_unless_exception_type(async_retry_base, sync_retry_unless_exception_type):
+    pass
 
-    def __init__(self, *retries: retry_base | async_retry_base) -> None:
-        self.retries = retries
 
-    @override
-    async def __call__(self, retry_state: "RetryCallState") -> bool:  # type: ignore[override]
-        result = True
-        for r in self.retries:
-            result = result and await _utils.wrap_to_async_func(r)(retry_state)
-            if not result:
-                break
-        return result
+class retry_if_exception_cause_type(
+    async_retry_base, sync_retry_if_exception_cause_type
+):
+    pass
 
-    @override
-    def __rand__(  # type: ignore[misc,override]
-        self, other: "retry_base | async_retry_base"
-    ) -> "retry_all":
-        if isinstance(other, retry_all):
-            return retry_all(*other.retries, *self.retries)
-        return retry_all(other, *self.retries)
+
+class retry_if_result(async_retry_base, sync_retry_if_result):
+    pass
+
+
+class retry_if_not_result(async_retry_base, sync_retry_if_not_result):
+    pass
+
+
+class retry_if_exception_message(async_retry_base, sync_retry_if_exception_message):
+    pass
+
+
+class retry_if_not_exception_message(
+    async_retry_base, sync_retry_if_not_exception_message
+):
+    pass
+
+
+class _retry_never(async_retry_base, sync_retry_never):
+    pass
+
+
+retry_never = _retry_never()
+
+
+class _retry_always(async_retry_base, sync_retry_always):
+    pass
+
+
+retry_always = _retry_always()
+
+
+class retry_any(async_retry_base, sync_retry_any):
+    def __init__(self, *retries: SyncRetryBaseT | async_retry_base) -> None:
+        super().__init__(*retries)
+
+
+class retry_all(async_retry_base, sync_retry_all):
+    def __init__(self, *retries: SyncRetryBaseT | async_retry_base) -> None:
+        super().__init__(*retries)
+
+
+__all__ = [
+    "RetryBaseT",
+    "async_retry_base",
+    "retry_all",
+    "retry_always",
+    "retry_any",
+    "retry_base",
+    "retry_if_exception",
+    "retry_if_exception_cause_type",
+    "retry_if_exception_message",
+    "retry_if_exception_type",
+    "retry_if_not_exception_message",
+    "retry_if_not_exception_type",
+    "retry_if_not_result",
+    "retry_if_result",
+    "retry_never",
+    "retry_unless_exception_type",
+]

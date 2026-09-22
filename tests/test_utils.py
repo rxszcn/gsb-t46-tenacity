@@ -1,3 +1,4 @@
+import asyncio
 import functools
 
 from tenacity import _utils
@@ -55,3 +56,16 @@ def test_find_ordinal() -> None:
     assert _utils.find_ordinal(111) == "th"
     assert _utils.find_ordinal(112) == "th"
     assert _utils.find_ordinal(113) == "th"
+
+
+def test_wrap_to_async_func_awaits_returned_awaitable() -> None:
+    async def predicate() -> bool:
+        return True
+
+    def callable_returning_awaitable() -> object:
+        return predicate()
+
+    async def call_wrapped() -> bool:
+        return bool(await _utils.wrap_to_async_func(callable_returning_awaitable)())
+
+    assert asyncio.run(call_wrapped())

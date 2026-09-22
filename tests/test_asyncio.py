@@ -34,6 +34,7 @@ from tenacity import (
     AsyncRetrying,
     RetryCallState,
     RetryError,
+    _utils,
     retry,
     retry_if_exception,
     retry_if_result,
@@ -46,6 +47,7 @@ from .test_tenacity import (
     NoIOErrorAfterCount,
     NoneReturnUntilAfterCount,
     current_time_ms,
+    make_retry_state,
 )
 
 _F = TypeVar("_F", bound=Callable[..., Coroutine[Any, Any, Any]])
@@ -423,6 +425,51 @@ class TestContextManager(unittest.TestCase):
         self.assertEqual(3, result)
 
     @asynctest
+    async def test_retry_sync_condition_with_async_result(self) -> None:
+        attempts = 0
+
+        async def lt_3(x: float) -> bool:
+            return x < 3
+
+        async for attempt in tasyncio.AsyncRetrying(
+            retry=tenacity.retry_if_result(lt_3)
+        ):
+            with attempt:
+                attempts += 1
+            attempt.retry_state.set_result(attempts)
+
+        self.assertEqual(3, attempts)
+
+    @asynctest
+    async def test_sync_and_async_result_conditions_agree(self) -> None:
+        async def async_predicate(value: int) -> bool:
+            return value < 3
+
+        def sync_predicate(value: int) -> bool:
+            return value < 3
+
+        retry_state = make_retry_state(
+            1, 1.0, last_result=tenacity.Future.construct(1, 3, False)
+        )
+
+        self.assertFalse(
+            await _utils.wrap_to_async_func(tasyncio.retry_if_result(async_predicate))(
+                retry_state
+            )
+        )
+        self.assertFalse(
+            await _utils.wrap_to_async_func(tenacity.retry_if_result(async_predicate))(
+                retry_state
+            )
+        )
+        self.assertTrue(
+            await _utils.wrap_to_async_func(
+                tasyncio.retry_if_not_result(async_predicate)
+            )(retry_state)
+        )
+        self.assertTrue(tenacity.retry_if_not_result(sync_predicate)(retry_state))
+
+    @asynctest
     async def test_retry_with_async_exc(self) -> None:
         async def test() -> int:
             attempts = 0
@@ -558,6 +605,59 @@ class TestContextManager(unittest.TestCase):
         result = await test()
 
         self.assertEqual(3, result)
+
+    @asynctest
+    async def test_async_retry_combinators_flatten_like_sync(self) -> None:
+        async def async_predicate(value: int) -> bool:
+            return value == 1
+
+        async def async_state_predicate(retry_state: RetryCallState) -> bool:
+            assert retry_state.outcome is not None
+            return bool(retry_state.outcome.result() == 1)
+
+        def sync_state_predicate(retry_state: RetryCallState) -> bool:
+            assert retry_state.outcome is not None
+            return bool(retry_state.outcome.result() == 1)
+
+        a = tasyncio.retry_if_result(async_predicate)
+        b = tasyncio.retry_if_result(async_predicate)
+        c = tasyncio.retry_if_result(async_predicate)
+
+        self.assertEqual(len((a & b & c).retries), 3)
+        self.assertEqual(len((a | b | c).retries), 3)
+
+        retry_state = make_retry_state(
+            1, 1.0, last_result=tenacity.Future.construct(1, 1, False)
+        )
+        combinations = [
+            a & sync_state_predicate,
+            sync_state_predicate & a,
+            a | async_state_predicate,
+            async_state_predicate | a,
+        ]
+        for combined in combinations:
+            self.assertIsInstance(combined, tasyncio.retry.retry_base)
+            evaluate = _utils.wrap_to_async_func(combined)
+            self.assertTrue(await evaluate(retry_state))
+
+    @asynctest
+    async def test_async_retry_exports_match_sync(self) -> None:
+        sync_names = {
+            name
+            for name in tenacity.__all__
+            if name.startswith("retry_") and name != "retry"
+        }
+        async_names = {
+            name for name in tasyncio.retry.__all__ if name.startswith("retry_")
+        }
+
+        self.assertEqual(sync_names, async_names)
+
+        for name in sync_names:
+            with self.subTest(name=name):
+                self.assertTrue(
+                    hasattr(tasyncio.retry, name) and hasattr(tasyncio, name)
+                )
 
     @asynctest
     async def test_async_retying_iterator(self) -> None:

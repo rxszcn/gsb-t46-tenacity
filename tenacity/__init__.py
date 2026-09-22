@@ -415,7 +415,7 @@ class BaseRetrying(ABC):
         self.iter_state.actions.append(fn)
 
     def _run_retry(self, retry_state: "RetryCallState") -> None:
-        self.iter_state.retry_run_result = self.retry(retry_state)
+        self.iter_state.retry_run_result = self.retry(retry_state)  # type: ignore[assignment]
 
     def _run_wait(self, retry_state: "RetryCallState") -> None:
         # `wait` is annotated as always set, so a type checker sees this guard

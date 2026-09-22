@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import warnings
 
 import tenacity
@@ -93,6 +94,8 @@ async def main():
     r1 = await mixed_async_comb(rs)
     print("  异步组合器 evaluate ->", r1)
     r2 = mixed_sync_comb(rs)
+    if inspect.isawaitable(r2):
+        r2 = await r2
     print("  同步组合器 evaluate -> %r (类型 %s)" % (r2, type(r2).__name__))
 
     print("=== 7) 组合器展平：三条链式与的 len(retries)")

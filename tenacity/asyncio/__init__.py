@@ -38,9 +38,19 @@ from tenacity._utils import override
 from .retry import (
     RetryBaseT,
     retry_all,
+    retry_always,
     retry_any,
+    retry_base,
     retry_if_exception,
+    retry_if_exception_cause_type,
+    retry_if_exception_message,
+    retry_if_exception_type,
+    retry_if_not_exception_message,
+    retry_if_not_exception_type,
+    retry_if_not_result,
     retry_if_result,
+    retry_never,
+    retry_unless_exception_type,
 )
 
 if t.TYPE_CHECKING:
@@ -98,7 +108,7 @@ class AsyncRetrying(BaseRetrying):
             sleep=sleep,  # type: ignore[arg-type]
             stop=stop,
             wait=wait,
-            retry=retry,  # type: ignore[arg-type]
+            retry=retry,
             before=before,  # type: ignore[arg-type]
             after=after,  # type: ignore[arg-type]
             before_sleep=before_sleep,  # type: ignore[arg-type]
@@ -248,7 +258,17 @@ __all__ = [
     "AsyncRetrying",
     "WrappedFn",
     "retry_all",
+    "retry_always",
     "retry_any",
+    "retry_base",
     "retry_if_exception",
+    "retry_if_exception_cause_type",
+    "retry_if_exception_message",
+    "retry_if_exception_type",
+    "retry_if_not_exception_message",
+    "retry_if_not_exception_type",
+    "retry_if_not_result",
     "retry_if_result",
+    "retry_never",
+    "retry_unless_exception_type",
 ]
